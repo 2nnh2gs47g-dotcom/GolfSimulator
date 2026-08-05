@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Bay Monitor — Phase 1</title>
+<style>
+  :root{
+    --ink:#0b0f12;
+    --panel:#141b21;
+    --line:#243039;
+    --dim:#7d919e;
+    --text:#dfe8ee;
+    --signal:#ffb02e;
+    --good:#5ad1a0;
+    --bad:#ff6b5a;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{
+    background:var(--ink);color:var(--text);
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    font-size:14px;line-height:1.45;
+    padding-bottom:env(safe-area-inset-bottom);
+  }
+  h1,h2{font-family:"Helvetica Neue",Arial,sans-serif;letter-spacing:-.02em;margin:0}
+  .wrap{max-width:560px;margin:0 auto;padding:14px}
+  header{display:flex;align-items:baseline;justify-content:space-between;gap:10px;padding:4px 0 12px}
+  header h1{font-size:17px;font-weight:700}
+  .phase{font-size:11px;color:var(--signal);letter-spacing:.14em;text-transform:uppercase}
+
+  .stage{position:relative;background:#000;border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stage video{display:block;width:100%;height:auto}
+  .stage canvas.overlay{position:absolute;inset:0;width:100%;height:100%}
+  .hud{
+    position:absolute;left:0;right:0;bottom:0;padding:8px 10px;
+    background:linear-gradient(transparent,rgba(0,0,0,.78));
+    display:flex;justify-content:space-between;font-size:11px;color:var(--dim)
+  }
+  .hud b{color:var(--text);font-weight:600}
+  .banner{
+    position:absolute;top:0;left:0;right:0;padding:8px 10px;font-size:12px;
+    background:rgba(0,0,0,.62);border-bottom:1px solid var(--line)
+  }
+  .banner.warn{color:var(--signal)}
+
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  button{
+    flex:1 1 auto;min-height:46px;padding:0 14px;border-radius:8px;cursor:pointer;
+    font-family:inherit;font-size:13px;font-weight:600;letter-spacing:.02em;
+    background:var(--panel);color:var(--text);border:1px solid var(--line);
+  }
+  button.primary{background:var(--signal);color:#1a1206;border-color:var(--signal)}
+  button.live{background:var(--bad);color:#fff;border-color:var(--bad)}
+  button:disabled{opacity:.38;cursor:not-allowed}
+  button:focus-visible{outline:2px solid var(--signal);outline-offset:2px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px;margin-top:12px}
+  .steps{list-style:none;margin:0;padding:0;counter-reset:s}
+  .steps li{
+    padding:5px 0 5px 26px;position:relative;color:var(--dim);font-size:12.5px;counter-increment:s
+  }
+  .steps li::before{
+    content:counter(s);position:absolute;left:0;top:5px;width:17px;height:17px;
+    border:1px solid var(--line);border-radius:50%;text-align:center;line-height:16px;
+    font-size:10px;color:var(--dim)
+  }
+  .steps li.done{color:var(--text)}
+  .steps li.done::before{content:"✓";border-color:var(--good);color:var(--good)}
+  .steps li.now{color:var(--signal)}
+  .steps li.now::before{border-color:var(--signal);color:var(--signal)}
+
+  .readout{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border-radius:8px;overflow:hidden}
+  .cell{background:var(--panel);padding:12px}
+  .cell .label{font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+  .cell .val{font-size:30px;font-weight:600;letter-spacing:-.03em;margin-top:2px}
+  .cell .val small{font-size:13px;color:var(--dim);font-weight:400;margin-left:3px}
+  .cell .band{font-size:11px;color:var(--dim);margin-top:2px}
+  .tag{display:inline-block;font-size:9px;letter-spacing:.12em;text-transform:uppercase;
+    border:1px solid currentColor;border-radius:3px;padding:0 4px;margin-left:6px;vertical-align:2px}
+  .measured{color:var(--good)}
+  .low{color:var(--signal)}
+  .void{color:var(--bad)}
+
+  table{width:100%;border-collapse:collapse;font-size:12px;margin-top:6px}
+  th,td{text-align:right;padding:5px 4px;border-bottom:1px solid var(--line)}
+  th:first-child,td:first-child{text-align:left;color:var(--dim)}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--dim);font-weight:400}
+  .muted{color:var(--dim);font-size:12px}
+  details{margin-top:12px}
+  summary{cursor:pointer;color:var(--dim);font-size:12px;padding:6px 0}
+  details p{font-size:12.5px;color:var(--dim);margin:6px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Bay Monitor</h1>
+  <span class="phase">Phase 1 · speed + launch</span>
+</header>
+
+<div class="stage">
+  <video id="vid" playsinline muted></video>
+  <canvas class="overlay" id="ov"></canvas>
+  <div class="banner" id="banner">Point the camera face-on to the ball, then start it.</div>
+  <div class="hud">
+    <span>capture <b id="fps">—</b> fps</span>
+    <span>scale <b id="scale">—</b> mm/px</span>
+    <span id="state">idle</span>
+  </div>
+</div>
+
+<div class="row">
+  <button id="btnCam" class="primary">Start camera</button>
+  <button id="btnCal" disabled>Set scale</button>
+  <button id="btnArm" disabled>Arm</button>
+</div>
+
+<div class="card">
+  <ol class="steps" id="steps">
+    <li id="s1">Mount the phone side-on, 6–8 ft from the ball, lens level with the ground.</li>
+    <li id="s2">Tap the left and right edge of the ball to set the pixel scale.</li>
+    <li id="s3">Arm, stay out of the strike zone, and hit. It records on its own.</li>
+  </ol>
+</div>
+
+<div class="card">
+  <div class="readout">
+    <div class="cell">
+      <div class="label">Ball speed</div>
+      <div class="val" id="vSpeed">—<small>mph</small></div>
+      <div class="band" id="bSpeed">no shot yet</div>
+    </div>
+    <div class="cell">
+      <div class="label">Launch angle</div>
+      <div class="val" id="vLaunch">—<small>°</small></div>
+      <div class="band" id="bLaunch">no shot yet</div>
+    </div>
+  </div>
+  <div class="muted" id="quality" style="margin-top:10px">Nothing measured yet.</div>
+</div>
+
+<div class="card">
+  <h2 style="font-size:13px">Session</h2>
+  <table id="tbl">
+    <thead><tr><th>#</th><th>Speed</th><th>Launch</th><th>Frames</th><th>fps</th></tr></thead>
+    <tbody></tbody>
+  </table>
+  <div class="row">
+    <button id="btnCsv">Export CSV</button>
+    <button id="btnClear">Clear session</button>
+  </div>
+</div>
+
+<details>
+  <summary>What this can and cannot measure</summary>
+  <p><b>Measured:</b> ball speed and vertical launch angle, both from pixel displacement scaled by the ball's 42.67 mm diameter. Nothing else on this screen is estimated or modelled.</p>
+  <p><b>Not measured:</b> spin, carry, curve, club speed. Those need phase 2 and they need an inference model, so they stay off this screen rather than appear as a guess.</p>
+  <p><b>The frame rate ceiling.</b> A browser camera usually delivers 30–60 fps. A driver at 150 mph covers about 1.1 m per frame at 60 fps, so the ball leaves the frame before a second sample exists. Below roughly 120 fps this tool is honest only for wedges, chips and putts. Slower phone speeds and shorter clubs give more samples and tighter numbers. A native build with 240 fps slo-mo is what makes driver readings viable.</p>
+  <p><b>Angle discipline.</b> Face-on to the ball, lens level, ball filling a reasonable part of the frame. Any tilt or off-axis placement biases both numbers, and the app cannot detect that for you.</p>
+  <p><b>Validating it.</b> Roll a ball a measured distance across a flat floor at a steady speed and check the reading against distance over stopwatch time, or compare a few wedge shots against a known launch monitor. Do this before trusting any number.</p>
+</details>
+
+</div>
+
+<script>
+(() => {
+  const BALL_MM = 42.67;
+  const PW = 320;              // processing width
+  const DIFF_THRESH = 26;      // grayscale delta
+  const MIN_MASS = 6;          // pixels
+  const SEARCH_R0 = 110;       // first-frame search radius (proc px)
+  const GATE = 55;             // prediction gate radius (proc px)
+  const MAX_SAMPLES = 14;
+
+  const $ = id => document.getElementById(id);
+  const vid = $('vid'), ov = $('ov');
+  const octx = ov.getContext('2d');
+
+  const proc = document.createElement('canvas');
+  let pctx = null, PH = 0;
+
+  let stream=null, prevGray=null, mmPerPx=null, restPt=null;
+  let calPts=[], mode='idle';       // idle | calibrate | armed | tracking | done
+  let samples=[], fpsEst=0, lastT=null, shots=[], predicted=null;
+
+  /* ---------- camera ---------- */
+  $('btnCam').onclick = async () => {
+    if (stream) { stop(); return; }
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video:{ facingMode:{ideal:'environment'}, width:{ideal:1280},
+                frameRate:{ideal:240, min:30} }, audio:false });
+    } catch(e) {
+      banner('Camera blocked. Allow camera access in the browser, then start again.', true); return;
+    }
+    vid.srcObject = stream;
+    await vid.play();
+    PH = Math.round(PW * vid.videoHeight / vid.videoWidth);
+    proc.width = PW; proc.height = PH;
+    pctx = proc.getContext('2d', {willReadFrequently:true});
+    ov.width = PW; ov.height = PH;
+    $('btnCam').textContent = 'Stop camera';
+    $('btnCam').classList.remove('primary');
+    $('btnCal').disabled = false;
+    step(1,'done'); step(2,'now');
+    banner('Tap the left edge of the ball, then the right edge.');
+    mode = 'calibrate'; calPts = [];
+    loop();
+  };
+
+  function stop(){
+    stream.getTracks().forEach(t=>t.stop()); stream=null;
+    mode='idle'; setState('idle');
+    $('btnCam').textContent='Start camera'; $('btnCam').classList.add('primary');
+    $('btnCal').disabled = true; $('btnArm').disabled = true;
+  }
+
+  $('btnCal').onclick = () => {
+    calPts=[]; mmPerPx=null; restPt=null; mode='calibrate';
+    $('btnArm').disabled = true; step(2,'now'); step(3,'');
+    banner('Tap the left edge of the ball, then the right edge.');
+  };
+
+  ov.addEventListener('click', e => {
+    if (mode!=='calibrate') return;
+    const r = ov.getBoundingClientRect();
+    calPts.push({ x:(e.clientX-r.left)/r.width*PW, y:(e.clientY-r.top)/r.height*PH });
+    if (calPts.length===2){
+      const d = Math.hypot(calPts[0].x-calPts[1].x, calPts[0].y-calPts[1].y);
+      if (d < 4){ calPts=[]; banner('Those taps were too close together. Tap the two edges of the ball.', true); return; }
+      mmPerPx = BALL_MM / d;
+      restPt = { x:(calPts[0].x+calPts[1].x)/2, y:(calPts[0].y+calPts[1].y)/2 };
+      $('scale').textContent = mmPerPx.toFixed(2);
+      $('btnArm').disabled = false;
+      mode='idle'; step(2,'done'); step(3,'now');
+      banner('Scale set. Arm when you are ready to hit.');
+    }
+  });
+
+  $('btnArm').onclick = () => {
+    if (mode==='armed' || mode==='tracking'){ mode='idle'; armUI(false); banner('Disarmed.'); return; }
+    samples=[]; predicted=null; prevGray=null; mode='armed'; armUI(true);
+    banner('Armed. Keep hands and club out of the ball area until you swing.');
+  };
+
+  function armUI(on){
+    $('btnArm').textContent = on ? 'Disarm' : 'Arm';
+    $('btnArm').classList.toggle('live', on);
+    setState(on ? 'armed' : 'idle');
+  }
+
+  /* ---------- frame loop ---------- */
+  function loop(){
+    const cb = (now, meta) => {
+      const t = meta && meta.mediaTime != null ? meta.mediaTime : now/1000;
+      onFrame(t);
+      if (stream) schedule(cb);
+    };
+    schedule(cb);
+  }
+  function schedule(cb){
+    if (vid.requestVideoFrameCallback) vid.requestVideoFrameCallback(cb);
+    else requestAnimationFrame(n=>cb(n,null));
+  }
+
+  function onFrame(t){
+    pctx.drawImage(vid, 0, 0, PW, PH);
+    const img = pctx.getImageData(0,0,PW,PH).data;
+    const gray = new Uint8ClampedArray(PW*PH);
+    for (let i=0,p=0;i<gray.length;i++,p+=4)
+      gray[i] = (img[p]*77 + img[p+1]*150 + img[p+2]*29) >> 8;
+
+    if (lastT!=null){ const dt=t-lastT; if (dt>0.0005 && dt<0.2){
+      fpsEst = fpsEst ? fpsEst*0.8 + (1/dt)*0.2 : 1/dt;
+      $('fps').textContent = fpsEst.toFixed(0);
+    }}
+    lastT = t;
+
+    let hit = null;
+    if (prevGray && (mode==='armed' || mode==='tracking')){
+      const centre = mode==='armed' ? restPt : (predicted || samples[samples.length-1]);
+      const radius = mode==='armed' ? SEARCH_R0 : GATE;
+      hit = blobNear(gray, prevGray, centre, radius);
+    }
+    prevGray = gray;
+
+    if (hit){
+      if (mode==='armed'){
+        const moved = Math.hypot(hit.x-restPt.x, hit.y-restPt.y);
+        if (moved > 6){ mode='tracking'; setState('tracking'); samples=[{x:hit.x,y:hit.y,t}]; }
+      } else if (mode==='tracking'){
+        const last = samples[samples.length-1];
+        const dx = hit.x-last.x, dy = hit.y-last.y;
+        const away = Math.hypot(hit.x-restPt.x, hit.y-restPt.y) > Math.hypot(last.x-restPt.x, last.y-restPt.y);
+        if (away || samples.length<2){
+          samples.push({x:hit.x,y:hit.y,t});
+          predicted = { x:hit.x+dx, y:hit.y+dy };
+        }
+        if (samples.length>=MAX_SAMPLES || out(predicted)) finish();
+      }
+    } else if (mode==='tracking'){
+      if (samples.length>=2) finish(); else if (samples.length===1) { /* wait one frame */ }
+    }
+
+    draw(hit);
+  }
+
+  function out(p){ return !p || p.x<2 || p.y<2 || p.x>PW-2 || p.y>PH-2; }
+
+  function blobNear(cur, prev, c, r){
+    if (!c) return null;
+    const x0=Math.max(0,(c.x-r)|0), x1=Math.min(PW-1,(c.x+r)|0);
+    const y0=Math.max(0,(c.y-r)|0), y1=Math.min(PH-1,(c.y+r)|0);
+    let sx=0, sy=0, sw=0, n=0;
+    for (let y=y0;y<=y1;y++){
+      for (let x=x0;x<=x1;x++){
+        const i=y*PW+x;
+        const d=Math.abs(cur[i]-prev[i]);
+        if (d>DIFF_THRESH && cur[i]>prev[i]){        // ball is bright against most turf
+          const w=d-DIFF_THRESH;
+          sx+=x*w; sy+=y*w; sw+=w; n++;
+        }
+      }
+    }
+    if (n<MIN_MASS || n>2400 || sw===0) return null;  // upper bound rejects body/club sweep
+    return { x:sx/sw, y:sy/sw, mass:n };
+  }
+
+  /* ---------- fit ---------- */
+  function finish(){
+    mode='idle'; armUI(false); predicted=null;
+    if (samples.length<2){ report(null,'Not enough frames caught the ball. Re-arm and try again.'); return; }
+    const t0=samples[0].t;
+    const fit = a => {
+      let st=0,sv=0,stt=0,stv=0,n=samples.length;
+      samples.forEach(s=>{const tt=s.t-t0,vv=s[a];st+=tt;sv+=vv;stt+=tt*tt;stv+=tt*vv;});
+      const den = n*stt - st*st;
+      return den===0 ? 0 : (n*stv - st*sv)/den;
+    };
+    const vx = fit('x'), vy = fit('y');                  // px/s, y down
+    const speedMph = Math.hypot(vx,vy)*mmPerPx*0.001*2.23694;
+    const launch = Math.atan2(-vy, Math.abs(vx))*180/Math.PI;
+    report({ speed:speedMph, launch, frames:samples.length, fps:fpsEst });
+  }
+
+  function report(r, msg){
+    if (!r){ $('quality').textContent = msg; banner(msg, true); return; }
+    const tier = r.frames>=5 && r.fps>=110 ? 'measured'
+               : r.frames>=3 ? 'low' : 'void';
+    const bands = { measured:['±2 mph','±1.5°'], low:['±6 mph','±4°'], void:['wide — 2 frames only','wide — 2 frames only'] };
+    const names = { measured:'measured', low:'low confidence', void:'indicative only' };
+
+    $('vSpeed').innerHTML = r.speed.toFixed(1)+'<small>mph</small><span class="tag '+tier+'">'+names[tier]+'</span>';
+    $('vLaunch').innerHTML = r.launch.toFixed(1)+'<small>°</small><span class="tag '+tier+'">'+names[tier]+'</span>';
+    $('bSpeed').textContent = bands[tier][0];
+    $('bLaunch').textContent = bands[tier][1];
+    $('quality').textContent = r.frames+' ball positions at '+r.fps.toFixed(0)+' fps. '
+      + (r.fps<110 ? 'Frame rate is too low for full-swing shots — treat anything above wedge speed as indicative.' 
+                   : 'Frame rate is adequate for this speed.');
+    shots.push(r); renderTable();
+    banner('Shot logged. Re-arm for the next one.');
+  }
+
+  function renderTable(){
+    $('tbl').querySelector('tbody').innerHTML = shots.map((s,i)=>
+      `<tr><td>${i+1}</td><td>${s.speed.toFixed(1)}</td><td>${s.launch.toFixed(1)}</td><td>${s.frames}</td><td>${s.fps.toFixed(0)}</td></tr>`
+    ).join('');
+  }
+
+  $('btnCsv').onclick = () => {
+    if (!shots.length){ banner('No shots to export yet.', true); return; }
+    const csv = 'shot,ball_speed_mph,launch_deg,frames,capture_fps\n' +
+      shots.map((s,i)=>[i+1,s.speed.toFixed(2),s.launch.toFixed(2),s.frames,s.fps.toFixed(0)].join(',')).join('\n');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+    a.download = 'bay-monitor-session.csv'; a.click();
+  };
+  $('btnClear').onclick = () => { shots=[]; renderTable(); $('quality').textContent='Session cleared.'; };
+
+  /* ---------- overlay ---------- */
+  function draw(hit){
+    octx.clearRect(0,0,PW,PH);
+    if (restPt){
+      octx.strokeStyle='#ffb02e'; octx.lineWidth=1;
+      octx.beginPath(); octx.arc(restPt.x,restPt.y,9,0,7); octx.stroke();
+      octx.beginPath(); octx.moveTo(restPt.x-16,restPt.y); octx.lineTo(restPt.x+16,restPt.y); octx.stroke();
+    }
+    calPts.forEach(p=>{ octx.fillStyle='#ffb02e'; octx.beginPath(); octx.arc(p.x,p.y,3,0,7); octx.fill(); });
+    if (samples.length){
+      octx.strokeStyle='#5ad1a0'; octx.lineWidth=1.5; octx.beginPath();
+      samples.forEach((s,i)=> i?octx.lineTo(s.x,s.y):octx.moveTo(s.x,s.y));
+      octx.stroke();
+      samples.forEach(s=>{ octx.fillStyle='#5ad1a0'; octx.beginPath(); octx.arc(s.x,s.y,2.5,0,7); octx.fill(); });
+    }
+    if (hit && mode==='tracking'){
+      octx.strokeStyle='#5ad1a0'; octx.strokeRect(hit.x-7,hit.y-7,14,14);
+    }
+  }
+
+  function banner(msg, warn){ const b=$('banner'); b.textContent=msg; b.className='banner'+(warn?' warn':''); }
+  function setState(s){ $('state').textContent = s; }
+  function step(n, cls){ $('s'+n).className = cls||''; }
+})();
+</script>
+</body>
+</html>
